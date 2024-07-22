@@ -33,7 +33,9 @@ package tests
 
 import (
 	"encoding/binary"
-	"github.com/stretchr/testify/assert"
+	"errors"
+	"fmt"
+	"github.com/go-playground/assert/v2"
 	"testing"
 )
 
@@ -86,7 +88,64 @@ func Test_query(t *testing.T) {
 }
 
 func parser(payload []byte) ([]byte, error) {
-	return nil, nil
+		// 确保payload至少有8个字节，即帧头的长度
+		if len(payload) < 8 {
+			return nil, errors.New("payload is too short")
+		}
+
+		// 从payload的前两个字节中获取帧的总长度
+		frameLength := binary.BigEndian.Uint16(payload[0:2])
+
+		// 确保payload的长度与帧长度相符
+		if uint16(len(payload)) != frameLength {
+			return nil, fmt.Errorf("invalid frame length, expected %d, got %d", frameLength, len(payload))
+		}
+
+		// 检查第5个字节，判断是否包含SQL负载
+		if payload[4] != 0 {
+			sqlBytes := payload
+			subsequence := []byte{255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+			index := bytes.Index(sqlBytes, subsequence)
+			index = index + len(subsequence)
+			sqlBytes = payload[index+1:]
+			if payload[index+1] == 0 {
+				index = bytes.Index(sqlBytes, subsequence)
+				index = index + len(subsequence)
+				sqlBytes = sqlBytes[index+1:]
+			}
+			if sqlBytes[0] == 64 {
+				sqlBytes = sqlBytes[1:]
+			}
+			return filterVisibleSQL(sqlBytes), nil
+		} else {
+			fmt.Println("No SQL payload found.")
+		}
+
+		// 返回解析出的SQL负载
+		return nil, errors.New("no payload")
+	}
+
+	func filterVisibleSQL(sqlBytes []byte) []byte {
+		// 过滤掉不可见字符或非打印字符
+		fiBytes := []byte{0, 1, 254, 255, 128}
+		filterMap := make(map[byte]bool)
+		for _, v := range fiBytes {
+		filterMap[v] = true
+	}
+		var filtered []byte
+		for _, sqlByte := range sqlBytes {
+		if !filterMap[sqlByte] {
+		filtered = append(filtered, sqlByte)
+	}
+	}
+
+		visibleSQL := strings.Map(func(r rune) rune {
+		if r >= 32 && r <= 126 {
+		return r
+	}
+		return -1
+	}, string(filtered))
+		return []byte(visibleSQL)
 }
 
 ```
